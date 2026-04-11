@@ -1,4 +1,4 @@
-﻿import { redirect } from "next/navigation";
+import { redirect } from "next/navigation";
 import { headers } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
 
@@ -20,21 +20,27 @@ export default async function AppLayout({
     redirect("/account");
   }
 
-  // If the user has not completed onboarding (no full_name), force them there.
-  // Read x-pathname from the request headers (set by updateSession in middleware).
+  // Onboarding gate: only redirect NEW users who haven't completed onboarding.
+  // "New" is defined as: account was created within the last 2 hours.
+  // Existing users (older accounts) are NEVER redirected — they go straight to /chat.
   const headersList = await headers();
   const pathname = headersList.get("x-pathname") ?? "";
   const isOnOnboarding = pathname.startsWith("/onboarding");
 
   if (!isOnOnboarding) {
-    const { data: profile } = await supabase
-      .from("profiles")
-      .select("full_name")
-      .eq("id", user.id)
-      .single();
+    const createdAt = user.created_at ? new Date(user.created_at).getTime() : 0;
+    const isNewUser = Date.now() - createdAt < 2 * 60 * 60 * 1000; // 2 hours
 
-    if (!profile?.full_name) {
-      redirect("/onboarding");
+    if (isNewUser) {
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("full_name")
+        .eq("id", user.id)
+        .single();
+
+      if (!profile?.full_name) {
+        redirect("/onboarding");
+      }
     }
   }
 

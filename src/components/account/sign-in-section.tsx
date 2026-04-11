@@ -60,7 +60,7 @@ export function SignInSection() {
     setStatus("loading");
 
     if (mode === "login") {
-      const { error } = await supabase.auth.signInWithPassword({
+      const { data: loginData, error } = await supabase.auth.signInWithPassword({
         email: email.trim(),
         password,
       });
@@ -69,15 +69,19 @@ export function SignInSection() {
         toast.error(error.message);
         return;
       }
-      // Ensure a profile row exists — non-fatal, wrap in try/catch so a server
-      // action timing issue never blocks the user from reaching /chat.
-      try {
-        await ensureProfileExists();
-      } catch {
-        console.warn("[SignIn] ensureProfileExists failed (non-fatal) — continuing to /chat");
-      }
+      // Non-fatal: ensure profile row exists
+      try { await ensureProfileExists(); } catch { /* ignore */ }
+
+      // Check profile to decide where to send the user — only new users without
+      // a full_name should see onboarding; existing users always go to /chat.
+      const userId = loginData.user?.id;
+      const { data: profileData } = userId
+        ? await supabase.from("profiles").select("full_name").eq("id", userId).single()
+        : { data: null };
+
       toast.success("Welcome back! Let's get to work 💪");
-      window.location.href = "/chat";
+      window.location.href = profileData?.full_name ? "/chat" : "/onboarding";
+
     } else {
       // ── Sign up ──────────────────────────────────────────────────────────
       const { error } = await supabase.auth.signUp({
@@ -137,8 +141,8 @@ export function SignInSection() {
       const firstName = fullName.trim().split(" ")[0] || "champ";
       toast.success(`Welcome to Arno, ${firstName}! Let's get to work 💪`);
 
-      // Go to /onboarding if no name was set, otherwise /chat
-      window.location.href = fullName.trim() ? "/chat" : "/onboarding";
+      // NEW users always go to /onboarding to complete their profile setup.
+      window.location.href = "/onboarding";
     }
 
     setStatus("idle");

@@ -103,9 +103,7 @@ async function processLogTags(
 // ─── Model list (fallback order) ──────────────────────────────────────────────
 
 const CANDIDATE_MODELS = [
-  { apiVersion: "v1beta", model: "gemini-2.5-flash" },
   { apiVersion: "v1beta", model: "gemini-2.0-flash" },
-  { apiVersion: "v1beta", model: "gemini-2.0-flash-lite" },
   { apiVersion: "v1beta", model: "gemini-1.5-flash" },
 ];
 
@@ -201,6 +199,8 @@ export async function POST(request: NextRequest) {
 
   for (const candidate of CANDIDATE_MODELS) {
     const url = `${BASE_URL}/${candidate.apiVersion}/models/${candidate.model}:streamGenerateContent?alt=sse&key=${apiKey}`;
+
+    console.log("Calling Gemini API", candidate.model);
 
     let geminiRes: Response;
     try {

@@ -2,7 +2,7 @@
 
 import React from "react"
 import { cn } from "@/lib/utils"
-import { Dumbbell, User, Copy, ThumbsUp, ThumbsDown, RotateCcw } from "lucide-react"
+import { Dumbbell, User, Copy, ThumbsUp, ThumbsDown, RotateCcw, Calculator, TrendingUp, Pill } from "lucide-react"
 import { Button } from "@/v0-ui/button"
 import { toast } from "sonner"
 
@@ -246,9 +246,12 @@ function MessageBubble({ message }: { message: Message }) {
   return (
     <div className={cn("flex gap-4", isAssistant ? "items-start" : "items-start justify-end")}>
       {isAssistant && (
-        <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center shrink-0 mt-0.5">
-          <Dumbbell className="w-4 h-4 text-primary-foreground" />
-        </div>
+        <span style={{ color: "var(--foreground)" }} className="shrink-0 mt-0.5">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" width="32" height="32">
+            <rect width="300" height="300" rx="67" fill="currentColor"/>
+            <path d="M150 75 L210 225 L188 225 L176 190 L124 190 L112 225 L90 225 Z" fill="var(--background, #0f0f0f)"/>
+          </svg>
+        </span>
       )}
       <div className={cn("flex-1 max-w-2xl", !isAssistant && "flex flex-col items-end")}>
         <div
@@ -315,9 +318,12 @@ function MessageBubble({ message }: { message: Message }) {
 function TypingIndicator() {
   return (
     <div className="flex gap-4 items-start">
-      <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center shrink-0">
-        <Dumbbell className="w-4 h-4 text-primary-foreground" />
-      </div>
+      <span style={{ color: "var(--foreground)" }} className="shrink-0">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" width="32" height="32">
+          <rect width="300" height="300" rx="67" fill="currentColor"/>
+          <path d="M150 75 L210 225 L188 225 L176 190 L124 190 L112 225 L90 225 Z" fill="var(--background, #0f0f0f)"/>
+        </svg>
+      </span>
       <div className="bg-card border border-border rounded-2xl px-4 py-3">
         <div className="flex items-center gap-1.5">
           {[0, 150, 300].map((delay) => (
@@ -336,10 +342,10 @@ function TypingIndicator() {
 // ─── Empty State ──────────────────────────────────────────────────────────────
 
 const suggestions = [
-  { text: "Create a PPL workout split for me",     icon: "\u{1F4AA}" },
-  { text: "Calculate my daily macros",             icon: "\u{1F95A}" },
-  { text: "Help me track my bench press PR",       icon: "\u{1F4C8}" },
-  { text: "Best supplements for muscle recovery?", icon: "\u26A1" },
+  { text: "Create a PPL workout split for me",     icon: <Dumbbell className="w-5 h-5" /> },
+  { text: "Calculate my daily macros",             icon: <Calculator className="w-5 h-5" /> },
+  { text: "Help me track my bench press PR",       icon: <TrendingUp className="w-5 h-5" /> },
+  { text: "Best supplements for muscle recovery?", icon: <Pill className="w-5 h-5" /> },
 ]
 
 function EmptyState({ onSend }: { onSend?: (text: string) => void }) {
@@ -363,7 +369,9 @@ function EmptyState({ onSend }: { onSend?: (text: string) => void }) {
             onClick={() => onSend?.(suggestion.text)}
             className="p-4 text-left text-sm rounded-xl border border-border bg-card/50 hover:bg-card hover:border-primary/30 transition-all group flex items-start gap-3"
           >
-            <span className="text-lg">{suggestion.icon}</span>
+            <span className="text-muted-foreground group-hover:text-primary transition-colors shrink-0 mt-0.5">
+              {suggestion.icon}
+            </span>
             <span className="text-muted-foreground group-hover:text-foreground transition-colors">
               {suggestion.text}
             </span>
