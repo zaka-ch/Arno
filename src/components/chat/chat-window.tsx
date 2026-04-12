@@ -10,6 +10,7 @@ import { MessageList, Message } from "./message-list"
 import { ChatInput, SelectedImage } from "./chat-input"
 import { RightPanel } from "./right-panel"
 import { MacrosBar } from "./macros-bar"
+import { ProfileCompletionModal } from "./profile-completion-modal"
 import { cn } from "@/lib/utils"
 import { createClient } from "@/lib/supabase/client"
 import type { AuthChangeEvent, Session, User } from "@supabase/supabase-js"
@@ -23,6 +24,8 @@ export function ChatWindow() {
   const [showAuthPrompt, setShowAuthPrompt] = useState(false)
   const [isMobile, setIsMobile] = useState(true)
   const [macrosRefreshKey, setMacrosRefreshKey] = useState(0)
+  const [showProfileModal, setShowProfileModal] = useState(false)
+  const [profileModalName, setProfileModalName] = useState<string | null>(null)
 
   // Each chat session gets a UUID — stable across the component lifetime
   const [conversationId, setConversationId] = useState<string>(() =>
@@ -48,6 +51,37 @@ export function ChatWindow() {
     )
     return () => subscription.unsubscribe()
   }, [])
+
+  // ─── Profile completion check ─────────────────────────────────────────────
+  // Runs once when the user object becomes available. If any key fitness field
+  // is missing, shows the profile completion modal.
+  useEffect(() => {
+    if (!user) return
+    const supabase = createClient()
+    supabase
+      .from("profiles")
+      .select("full_name, current_weight, height, fitness_goal, gym_experience, preferred_split")
+      .eq("id", user.id)
+      .single()
+      .then(({ data: profile }: { data: { full_name?: string | null; current_weight?: number | null; height?: number | null; fitness_goal?: string | null; gym_experience?: string | null; preferred_split?: string | null } | null }) => {
+        const incomplete =
+          !profile?.current_weight ||
+          !profile?.height ||
+          !profile?.fitness_goal ||
+          !profile?.gym_experience ||
+          !profile?.preferred_split
+        if (incomplete) {
+          // Pre-fill name from Google OAuth metadata or existing profile
+          const name =
+            profile?.full_name ||
+            user.user_metadata?.full_name ||
+            user.user_metadata?.name ||
+            null
+          setProfileModalName(name)
+          setShowProfileModal(true)
+        }
+      })
+  }, [user])
 
   // ─── Responsive layout ────────────────────────────────────────────────────
   useEffect(() => {
@@ -332,6 +366,14 @@ export function ChatWindow() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* ── Profile completion modal ────────────────────────────────────────── */}
+      {showProfileModal && (
+        <ProfileCompletionModal
+          defaultName={profileModalName}
+          onComplete={() => setShowProfileModal(false)}
+        />
       )}
     </div>
   )
