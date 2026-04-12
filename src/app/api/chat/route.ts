@@ -1,20 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
-import Groq from "groq-sdk";
 import { buildSystemPrompt } from "@/constants/persona";
 import { createClient } from "@/lib/supabase/server";
+import Groq from "groq-sdk";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface IncomingMessage {
   role: string;
   content: string;
-  imageDataUrl?: string;
+  imageDataUrl?: string; // Ignored for Groq text models
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 /**
- * Parse and save [LOG_MEAL:{...}] and [LOG_PR:{...}] tags embedded by the LLM.
+ * Parse and save [LOG_MEAL:{...}] and [LOG_PR:{...}] tags.
  * Tags are then stripped from the text shown to the user.
  */
 async function processLogTags(
@@ -23,7 +23,7 @@ async function processLogTags(
   supabase: Awaited<ReturnType<typeof createClient>>
 ): Promise<string> {
   // Meal logs
-  const mealRegex = /\[LOG_MEAL:(\{[^\[\]]+\})\]/g;
+  const mealRegex = /\[LOG_MEAL:(\{[^[\]]+\})\]/g;
   let mealMatch;
   while ((mealMatch = mealRegex.exec(text)) !== null) {
     try {
@@ -43,7 +43,7 @@ async function processLogTags(
   }
 
   // PR logs
-  const prRegex = /\[LOG_PR:(\{[^\[\]]+\})\]/g;
+  const prRegex = /\[LOG_PR:(\{[^[\]]+\})\]/g;
   let prMatch;
   while ((prMatch = prRegex.exec(text)) !== null) {
     try {
@@ -61,7 +61,7 @@ async function processLogTags(
 
   // Strip tags from display text — replace with human-readable inline summary
   return text
-    .replace(/\[LOG_MEAL:(\{[^\[\]]+\})\]/g, (_, json) => {
+    .replace(/\[LOG_MEAL:(\{[^[\]]+\})\]/g, (_, json) => {
       try {
         const d = JSON.parse(json);
         return `\n\n📊 **Meal logged:** ${d.meal_name} — ${d.calories} kcal | P: ${d.protein_g ?? 0}g | C: ${d.carbs_g ?? 0}g | F: ${d.fat_g ?? 0}g`;
@@ -69,7 +69,7 @@ async function processLogTags(
         return "";
       }
     })
-    .replace(/\[LOG_PR:(\{[^\[\]]+\})\]/g, (_, json) => {
+    .replace(/\[LOG_PR:(\{[^[\]]+\})\]/g, (_, json) => {
       try {
         const d = JSON.parse(json);
         return `\n\n🏆 **PR logged:** ${d.exercise} — ${d.weight_kg} kg${d.reps ? ` × ${d.reps} reps` : ""}`;
@@ -79,16 +79,16 @@ async function processLogTags(
     });
 }
 
-// ─── Groq client ──────────────────────────────────────────────────────────────
-
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
-
 // ─── Route handler ────────────────────────────────────────────────────────────
 
 export async function POST(request: NextRequest) {
+  const groq = new Groq({ 
+    apiKey: process.env.GROQ_API_KEY 
+  });
+
   if (!process.env.GROQ_API_KEY) {
-    return NextResponse.json(
-      { error: "GROQ_API_KEY is not configured." },
+    return new Response(
+      JSON.stringify({ error: "GROQ_API_KEY is not configured." }),
       { status: 500 }
     );
   }
@@ -114,30 +114,26 @@ export async function POST(request: NextRequest) {
   try {
     body = await request.json();
   } catch {
-    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    return new Response(JSON.stringify({ error: "Invalid JSON body" }), { status: 400 });
   }
 
   const { messages, conversationId } = body;
   if (!messages || messages.length === 0) {
-    return NextResponse.json({ error: "No messages provided" }, { status: 400 });
+    return new Response(JSON.stringify({ error: "No messages provided" }), { status: 400 });
   }
 
-  // ── Build Groq messages ─────────────────────────────────────────────────────
-  const systemPrompt = buildSystemPrompt(profile);
-
-  // Map conversation history to Groq format (last 10 exchanges)
-  const history = messages.slice(-10).map((m) => ({
-    role: (m.role === "assistant" ? "assistant" : "user") as "user" | "assistant",
-    content: m.content,
+  // Limit history to last 10 exchanges to keep context window manageable
+  const recentMessages = messages.slice(-10);
+  
+  // Format for Groq
+  const conversationHistory = recentMessages.slice(0, -1).map(msg => ({
+    role: (msg.role === "assistant" || msg.role === "model") ? "assistant" as const : "user" as const,
+    content: msg.content
   }));
-
-  const groqMessages: Groq.Chat.ChatCompletionMessageParam[] = [
-    { role: "system", content: systemPrompt },
-    ...history,
-  ];
+  const userMessage = recentMessages[recentMessages.length - 1].content;
 
   // ── Save user message (fire-and-forget) ────────────────────────────────────
-  const latestMessage = messages[messages.length - 1];
+  const latestMessage = recentMessages[recentMessages.length - 1];
   if (user && latestMessage?.role === "user") {
     supabase
       .from("chat_messages")
@@ -152,13 +148,16 @@ export async function POST(request: NextRequest) {
       });
   }
 
-  // ── Call Groq with streaming ────────────────────────────────────────────────
-  console.log("Calling Groq API — llama-3.3-70b-versatile");
+  const systemPrompt = buildSystemPrompt(profile);
 
   try {
     const stream = await groq.chat.completions.create({
       model: "llama-3.3-70b-versatile",
-      messages: groqMessages,
+      messages: [
+        { role: "system", content: systemPrompt },
+        ...conversationHistory,
+        { role: "user", content: userMessage }
+      ],
       stream: true,
       max_tokens: 1024,
       temperature: 0.7,
@@ -171,7 +170,7 @@ export async function POST(request: NextRequest) {
       async start(controller) {
         try {
           for await (const chunk of stream) {
-            const text = chunk.choices[0]?.delta?.content ?? "";
+            const text = chunk.choices[0]?.delta?.content || "";
             if (text) {
               fullResponse += text;
               controller.enqueue(encoder.encode(text));
@@ -185,12 +184,13 @@ export async function POST(request: NextRequest) {
           );
         } finally {
           controller.close();
-
-          // Save assistant response + process log tags
+          
           if (user && fullResponse.trim()) {
+            // Process and save log tags, get cleaned text for DB storage
             const cleanedText = await processLogTags(fullResponse, user.id, supabase).catch(
               () => fullResponse
             );
+
             supabase
               .from("chat_messages")
               .insert({
@@ -207,26 +207,24 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    return new NextResponse(readable, {
+    return new Response(readable, {
       headers: {
         "Content-Type": "text/plain; charset=utf-8",
-        "Cache-Control": "no-cache",
-        "X-Content-Type-Options": "nosniff",
+        "Transfer-Encoding": "chunked",
       },
     });
-
-  } catch (error: unknown) {
-    const status = (error as { status?: number })?.status;
-    const message = error instanceof Error ? error.message : "Unknown error";
-
-    console.error("[/api/chat] Groq error:", message);
-
-    if (status === 429) {
-      return NextResponse.json({ error: "RATE_LIMIT" }, { status: 429 });
+  } catch (error: any) {
+    if (error?.status === 429) {
+      return new Response(
+        JSON.stringify({ 
+          error: "⏳ Quota reached — wait about a minute and try again." 
+        }),
+        { status: 429 }
+      );
     }
-
-    return NextResponse.json(
-      { error: "Something went wrong. Please try again." },
+    console.error("[/api/chat] Groq Error:", error);
+    return new Response(
+      JSON.stringify({ error: "Something went wrong. Please try again." }),
       { status: 500 }
     );
   }
