@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import Groq from "groq-sdk";
 import { buildSystemPrompt } from "@/constants/persona";
 import { createClient } from "@/lib/supabase/server";
 
@@ -10,32 +11,10 @@ interface IncomingMessage {
   imageDataUrl?: string;
 }
 
-interface GeminiPart {
-  text?: string;
-  inlineData?: { data: string; mimeType: string };
-}
-
-interface GeminiContent {
-  role: "user" | "model";
-  parts: GeminiPart[];
-}
-
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function toParts(msg: IncomingMessage): GeminiPart[] {
-  const parts: GeminiPart[] = [];
-  if (msg.content.trim()) parts.push({ text: msg.content });
-  if (msg.imageDataUrl) {
-    const [meta, data] = msg.imageDataUrl.split(",");
-    const mimeType = meta.split(":")[1].split(";")[0];
-    parts.push({ inlineData: { data, mimeType } });
-  }
-  if (parts.length === 0) parts.push({ text: "" });
-  return parts;
-}
-
 /**
- * Parse and save [LOG_MEAL:{...}] and [LOG_PR:{...}] tags embedded by Gemini.
+ * Parse and save [LOG_MEAL:{...}] and [LOG_PR:{...}] tags embedded by the LLM.
  * Tags are then stripped from the text shown to the user.
  */
 async function processLogTags(
@@ -44,7 +23,7 @@ async function processLogTags(
   supabase: Awaited<ReturnType<typeof createClient>>
 ): Promise<string> {
   // Meal logs
-  const mealRegex = /\[LOG_MEAL:(\{[^[\]]+\})\]/g;
+  const mealRegex = /\[LOG_MEAL:(\{[^\[\]]+\})\]/g;
   let mealMatch;
   while ((mealMatch = mealRegex.exec(text)) !== null) {
     try {
@@ -64,7 +43,7 @@ async function processLogTags(
   }
 
   // PR logs
-  const prRegex = /\[LOG_PR:(\{[^[\]]+\})\]/g;
+  const prRegex = /\[LOG_PR:(\{[^\[\]]+\})\]/g;
   let prMatch;
   while ((prMatch = prRegex.exec(text)) !== null) {
     try {
@@ -82,7 +61,7 @@ async function processLogTags(
 
   // Strip tags from display text — replace with human-readable inline summary
   return text
-    .replace(/\[LOG_MEAL:(\{[^[\]]+\})\]/g, (_, json) => {
+    .replace(/\[LOG_MEAL:(\{[^\[\]]+\})\]/g, (_, json) => {
       try {
         const d = JSON.parse(json);
         return `\n\n📊 **Meal logged:** ${d.meal_name} — ${d.calories} kcal | P: ${d.protein_g ?? 0}g | C: ${d.carbs_g ?? 0}g | F: ${d.fat_g ?? 0}g`;
@@ -90,7 +69,7 @@ async function processLogTags(
         return "";
       }
     })
-    .replace(/\[LOG_PR:(\{[^[\]]+\})\]/g, (_, json) => {
+    .replace(/\[LOG_PR:(\{[^\[\]]+\})\]/g, (_, json) => {
       try {
         const d = JSON.parse(json);
         return `\n\n🏆 **PR logged:** ${d.exercise} — ${d.weight_kg} kg${d.reps ? ` × ${d.reps} reps` : ""}`;
@@ -100,22 +79,16 @@ async function processLogTags(
     });
 }
 
-// ─── Model list (fallback order) ──────────────────────────────────────────────
+// ─── Groq client ──────────────────────────────────────────────────────────────
 
-const CANDIDATE_MODELS = [
-  { apiVersion: "v1beta", model: "gemini-2.0-flash" },
-  { apiVersion: "v1beta", model: "gemini-1.5-flash" },
-];
-
-const BASE_URL = "https://generativelanguage.googleapis.com";
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 // ─── Route handler ────────────────────────────────────────────────────────────
 
 export async function POST(request: NextRequest) {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
+  if (!process.env.GROQ_API_KEY) {
     return NextResponse.json(
-      { error: "GEMINI_API_KEY is not configured in .env.local" },
+      { error: "GROQ_API_KEY is not configured." },
       { status: 500 }
     );
   }
@@ -149,37 +122,22 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "No messages provided" }, { status: 400 });
   }
 
-  // Limit history to last 10 exchanges to keep context window manageable
-  const recentMessages = messages.slice(-10);
-
-  // ── Build Gemini contents ───────────────────────────────────────────────────
+  // ── Build Groq messages ─────────────────────────────────────────────────────
   const systemPrompt = buildSystemPrompt(profile);
 
-  const userContents: GeminiContent[] = recentMessages.map((msg) => ({
-    role: msg.role === "assistant" ? "model" : "user",
-    parts: toParts(msg),
+  // Map conversation history to Groq format (last 10 exchanges)
+  const history = messages.slice(-10).map((m) => ({
+    role: (m.role === "assistant" ? "assistant" : "user") as "user" | "assistant",
+    content: m.content,
   }));
 
-  // Inject system prompt as the opening exchange (compatible with all model versions)
-  const contents: GeminiContent[] = [
-    {
-      role: "user",
-      parts: [{ text: `[SYSTEM]\n${systemPrompt}\n\nAcknowledge briefly.` }],
-    },
-    {
-      role: "model",
-      parts: [{ text: "Understood — I'm ARNO, your AI fitness coach. Let's go! 💪" }],
-    },
-    ...userContents,
+  const groqMessages: Groq.Chat.ChatCompletionMessageParam[] = [
+    { role: "system", content: systemPrompt },
+    ...history,
   ];
 
-  const requestBody = {
-    contents,
-    generationConfig: { temperature: 0.8, topP: 0.95 },
-  };
-
   // ── Save user message (fire-and-forget) ────────────────────────────────────
-  const latestMessage = recentMessages[recentMessages.length - 1];
+  const latestMessage = messages[messages.length - 1];
   if (user && latestMessage?.role === "user") {
     supabase
       .from("chat_messages")
@@ -194,98 +152,45 @@ export async function POST(request: NextRequest) {
       });
   }
 
-  // ── Try each model in fallback order ───────────────────────────────────────
-  let lastError = "No working model found";
+  // ── Call Groq with streaming ────────────────────────────────────────────────
+  console.log("Calling Groq API — llama-3.3-70b-versatile");
 
-  for (const candidate of CANDIDATE_MODELS) {
-    const url = `${BASE_URL}/${candidate.apiVersion}/models/${candidate.model}:streamGenerateContent?alt=sse&key=${apiKey}`;
+  try {
+    const stream = await groq.chat.completions.create({
+      model: "llama-3.3-70b-versatile",
+      messages: groqMessages,
+      stream: true,
+      max_tokens: 1024,
+      temperature: 0.7,
+    });
 
-    console.log("Calling Gemini API", candidate.model);
+    const encoder = new TextEncoder();
+    let fullResponse = "";
 
-    let geminiRes: Response;
-    try {
-      geminiRes = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(requestBody),
-        signal: AbortSignal.timeout(30_000),
-      });
-    } catch (err) {
-      lastError = err instanceof Error ? err.message : "Network error";
-      console.warn("[/api/chat] Fetch error:", lastError);
-      continue;
-    }
-
-    // FIX 2: specific 429 handling — return JSON so frontend shows the bubble
-    if (geminiRes.status === 429) {
-      return NextResponse.json({ error: "RATE_LIMIT" }, { status: 429 });
-    }
-
-    if (!geminiRes.ok) {
-      const hint = await geminiRes.text().catch(() => "");
-      lastError = `${candidate.model} ${geminiRes.status}: ${hint.slice(0, 120)}`;
-      console.warn("[/api/chat]", lastError);
-      continue;
-    }
-
-    // FIX 1: guard against null response body
-    if (!geminiRes.body) {
-      lastError = `${candidate.model}: empty response body`;
-      continue;
-    }
-
-    console.log(`[/api/chat] Using ${candidate.apiVersion}/${candidate.model}`);
-
-    // ── Stream SSE -> plain text, process log tags after completion ──────────
-    const outputStream = new ReadableStream({
+    const readable = new ReadableStream({
       async start(controller) {
-        const reader = geminiRes.body!.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-        let fullResponse = "";
-
         try {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split("\n");
-            buffer = lines.pop() ?? "";
-
-            for (const line of lines) {
-              if (!line.startsWith("data: ")) continue;
-              const jsonStr = line.slice(6).trim();
-              if (!jsonStr || jsonStr === "[DONE]") continue;
-              try {
-                const parsed = JSON.parse(jsonStr);
-                const chunk: string =
-                  parsed?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
-                if (chunk) {
-                  fullResponse += chunk;
-                  controller.enqueue(new TextEncoder().encode(chunk));
-                }
-              } catch {
-                /* skip malformed SSE chunk */
-              }
+          for await (const chunk of stream) {
+            const text = chunk.choices[0]?.delta?.content ?? "";
+            if (text) {
+              fullResponse += text;
+              controller.enqueue(encoder.encode(text));
             }
           }
         } catch (streamErr) {
-          // FIX 1: stream error — enqueue error message so frontend gets something
           const errMsg = streamErr instanceof Error ? streamErr.message : "Stream error";
           console.error("[/api/chat] Stream error:", errMsg);
           controller.enqueue(
-            new TextEncoder().encode("\n\n[Something went wrong while streaming. Please try again.]")
+            encoder.encode("\n\n[Something went wrong while streaming. Please try again.]")
           );
         } finally {
           controller.close();
 
+          // Save assistant response + process log tags
           if (user && fullResponse.trim()) {
-            // Process and save log tags, get cleaned text for DB storage
             const cleanedText = await processLogTags(fullResponse, user.id, supabase).catch(
               () => fullResponse
             );
-
             supabase
               .from("chat_messages")
               .insert({
@@ -302,16 +207,27 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    return new NextResponse(outputStream, {
+    return new NextResponse(readable, {
       headers: {
         "Content-Type": "text/plain; charset=utf-8",
         "Cache-Control": "no-cache",
         "X-Content-Type-Options": "nosniff",
       },
     });
-  }
 
-  // All models failed
-  console.error("[/api/chat] All models exhausted:", lastError);
-  return NextResponse.json({ error: lastError }, { status: 502 });
+  } catch (error: unknown) {
+    const status = (error as { status?: number })?.status;
+    const message = error instanceof Error ? error.message : "Unknown error";
+
+    console.error("[/api/chat] Groq error:", message);
+
+    if (status === 429) {
+      return NextResponse.json({ error: "RATE_LIMIT" }, { status: 429 });
+    }
+
+    return NextResponse.json(
+      { error: "Something went wrong. Please try again." },
+      { status: 500 }
+    );
+  }
 }
