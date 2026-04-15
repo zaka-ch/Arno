@@ -1,20 +1,41 @@
 import { NextRequest, NextResponse } from "next/server";
 import { buildSystemPrompt } from "@/constants/persona";
 import { createClient } from "@/lib/supabase/server";
-import Groq from "groq-sdk";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface IncomingMessage {
   role: string;
   content: string;
-  imageDataUrl?: string; // Ignored for Groq text models
+  imageDataUrl?: string;
+}
+
+interface GeminiPart {
+  text?: string;
+  inlineData?: { data: string; mimeType: string };
+}
+
+interface GeminiContent {
+  role: "user" | "model";
+  parts: GeminiPart[];
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+function toParts(msg: IncomingMessage): GeminiPart[] {
+  const parts: GeminiPart[] = [];
+  if (msg.content.trim()) parts.push({ text: msg.content });
+  if (msg.imageDataUrl) {
+    const [meta, data] = msg.imageDataUrl.split(",");
+    const mimeType = meta.split(":")[1].split(";")[0];
+    parts.push({ inlineData: { data, mimeType } });
+  }
+  if (parts.length === 0) parts.push({ text: "" });
+  return parts;
+}
+
 /**
- * Parse and save [LOG_MEAL:{...}] and [LOG_PR:{...}] tags.
+ * Parse and save [LOG_MEAL:{...}] and [LOG_PR:{...}] tags embedded by Gemini.
  * Tags are then stripped from the text shown to the user.
  */
 async function processLogTags(
@@ -79,16 +100,22 @@ async function processLogTags(
     });
 }
 
+// ─── Model list (fallback order) ──────────────────────────────────────────────
+
+const CANDIDATE_MODELS = [
+  { apiVersion: "v1beta", model: "gemini-2.0-flash" },
+  { apiVersion: "v1beta", model: "gemini-1.5-flash" },
+];
+
+const BASE_URL = "https://generativelanguage.googleapis.com";
+
 // ─── Route handler ────────────────────────────────────────────────────────────
 
 export async function POST(request: NextRequest) {
-  const groq = new Groq({ 
-    apiKey: process.env.GROQ_API_KEY 
-  });
-
-  if (!process.env.GROQ_API_KEY) {
-    return new Response(
-      JSON.stringify({ error: "GROQ_API_KEY is not configured." }),
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    return NextResponse.json(
+      { error: "GEMINI_API_KEY is not configured in .env.local" },
       { status: 500 }
     );
   }
@@ -114,23 +141,42 @@ export async function POST(request: NextRequest) {
   try {
     body = await request.json();
   } catch {
-    return new Response(JSON.stringify({ error: "Invalid JSON body" }), { status: 400 });
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
   const { messages, conversationId } = body;
   if (!messages || messages.length === 0) {
-    return new Response(JSON.stringify({ error: "No messages provided" }), { status: 400 });
+    return NextResponse.json({ error: "No messages provided" }, { status: 400 });
   }
 
   // Limit history to last 10 exchanges to keep context window manageable
   const recentMessages = messages.slice(-10);
-  
-  // Format for Groq
-  const conversationHistory = recentMessages.slice(0, -1).map(msg => ({
-    role: (msg.role === "assistant" || msg.role === "model") ? "assistant" as const : "user" as const,
-    content: msg.content
+
+  // ── Build Gemini contents ───────────────────────────────────────────────────
+  const systemPrompt = buildSystemPrompt(profile);
+
+  const userContents: GeminiContent[] = recentMessages.map((msg) => ({
+    role: msg.role === "assistant" ? "model" : "user",
+    parts: toParts(msg),
   }));
-  const userMessage = recentMessages[recentMessages.length - 1].content;
+
+  // Inject system prompt as the opening exchange (compatible with all model versions)
+  const contents: GeminiContent[] = [
+    {
+      role: "user",
+      parts: [{ text: `[SYSTEM]\n${systemPrompt}\n\nAcknowledge briefly.` }],
+    },
+    {
+      role: "model",
+      parts: [{ text: "Understood — I'm ARNO, your AI fitness coach. Let's go! 💪" }],
+    },
+    ...userContents,
+  ];
+
+  const requestBody = {
+    contents,
+    generationConfig: { temperature: 0.8, topP: 0.95 },
+  };
 
   // ── Save user message (fire-and-forget) ────────────────────────────────────
   const latestMessage = recentMessages[recentMessages.length - 1];
@@ -148,43 +194,94 @@ export async function POST(request: NextRequest) {
       });
   }
 
-  const systemPrompt = buildSystemPrompt(profile);
+  // ── Try each model in fallback order ───────────────────────────────────────
+  let lastError = "No working model found";
 
-  try {
-    const stream = await groq.chat.completions.create({
-      model: "llama-3.3-70b-versatile",
-      messages: [
-        { role: "system", content: systemPrompt },
-        ...conversationHistory,
-        { role: "user", content: userMessage }
-      ],
-      stream: true,
-      max_tokens: 1024,
-      temperature: 0.7,
-    });
+  for (const candidate of CANDIDATE_MODELS) {
+    const url = `${BASE_URL}/${candidate.apiVersion}/models/${candidate.model}:streamGenerateContent?alt=sse&key=${apiKey}`;
 
-    const encoder = new TextEncoder();
-    let fullResponse = "";
+    console.log("Calling Gemini API", candidate.model);
 
-    const readable = new ReadableStream({
+    let geminiRes: Response;
+    try {
+      geminiRes = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(requestBody),
+        signal: AbortSignal.timeout(30_000),
+      });
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : "Network error";
+      console.warn("[/api/chat] Fetch error:", lastError);
+      continue;
+    }
+
+    if (!geminiRes.ok) {
+      const hint = await geminiRes.text().catch(() => "");
+      lastError = `${candidate.model} ${geminiRes.status}: ${hint.slice(0, 200)}`;
+      console.warn("[/api/chat]", lastError);
+      
+      if (geminiRes.status === 429) {
+        // If it's a 429, log it and try the NEXT model in the list as fallback 
+        // instead of immediately aborting.
+        continue;
+      }
+      
+      continue;
+    }
+
+    // FIX 1: guard against null response body
+    if (!geminiRes.body) {
+      lastError = `${candidate.model}: empty response body`;
+      continue;
+    }
+
+    console.log(`[/api/chat] Using ${candidate.apiVersion}/${candidate.model}`);
+
+    // ── Stream SSE -> plain text, process log tags after completion ──────────
+    const outputStream = new ReadableStream({
       async start(controller) {
+        const reader = geminiRes.body!.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let fullResponse = "";
+
         try {
-          for await (const chunk of stream) {
-            const text = chunk.choices[0]?.delta?.content || "";
-            if (text) {
-              fullResponse += text;
-              controller.enqueue(encoder.encode(text));
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() ?? "";
+
+            for (const line of lines) {
+              if (!line.startsWith("data: ")) continue;
+              const jsonStr = line.slice(6).trim();
+              if (!jsonStr || jsonStr === "[DONE]") continue;
+              try {
+                const parsed = JSON.parse(jsonStr);
+                const chunk: string =
+                  parsed?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+                if (chunk) {
+                  fullResponse += chunk;
+                  controller.enqueue(new TextEncoder().encode(chunk));
+                }
+              } catch {
+                /* skip malformed SSE chunk */
+              }
             }
           }
         } catch (streamErr) {
+          // FIX 1: stream error — enqueue error message so frontend gets something
           const errMsg = streamErr instanceof Error ? streamErr.message : "Stream error";
           console.error("[/api/chat] Stream error:", errMsg);
           controller.enqueue(
-            encoder.encode("\n\n[Something went wrong while streaming. Please try again.]")
+            new TextEncoder().encode("\n\n[Something went wrong while streaming. Please try again.]")
           );
         } finally {
           controller.close();
-          
+
           if (user && fullResponse.trim()) {
             // Process and save log tags, get cleaned text for DB storage
             const cleanedText = await processLogTags(fullResponse, user.id, supabase).catch(
@@ -207,25 +304,21 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    return new Response(readable, {
+    return new NextResponse(outputStream, {
       headers: {
         "Content-Type": "text/plain; charset=utf-8",
-        "Transfer-Encoding": "chunked",
+        "Cache-Control": "no-cache",
+        "X-Content-Type-Options": "nosniff",
       },
     });
-  } catch (error: any) {
-    if (error?.status === 429) {
-      return new Response(
-        JSON.stringify({ 
-          error: "⏳ Quota reached — wait about a minute and try again." 
-        }),
-        { status: 429 }
-      );
-    }
-    console.error("[/api/chat] Groq Error:", error);
-    return new Response(
-      JSON.stringify({ error: "Something went wrong. Please try again." }),
-      { status: 500 }
-    );
   }
+
+  // All models failed
+  console.error("[/api/chat] All models exhausted:", lastError);
+  
+  if (lastError.includes("429")) {
+    return NextResponse.json({ error: "RATE_LIMIT" }, { status: 429 });  
+  }
+  
+  return NextResponse.json({ error: lastError }, { status: 502 });
 }
