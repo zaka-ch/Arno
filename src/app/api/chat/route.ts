@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { buildSystemPrompt } from "@/constants/persona";
 import { createClient } from "@/lib/supabase/server";
 import Groq from "groq-sdk";
+import { analyzeUserStyle } from "@/lib/style-analyzer";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -117,16 +118,32 @@ export async function POST(request: NextRequest) {
   // Limit history to last 10 exchanges to keep context window manageable
   const recentMessages = messages.slice(-10);
 
-  // ── Build Groq messages ───────────────────────────────────────────────────
-  const systemPrompt = buildSystemPrompt(profile);
+  // ── Build Groq messages with Style Analysis ────────────────────────────────
+  const userMessagesText = recentMessages
+    .filter((msg) => msg.role === "user")
+    .slice(-5)
+    .map((msg) => msg.content);
+
+  const styleAnalysis = analyzeUserStyle(userMessagesText);
+  const finalSystemPrompt = buildSystemPrompt(profile) + styleAnalysis;
 
   const formattedMessages: any[] = [
-    { role: "system", content: systemPrompt },
+    { role: "system", content: finalSystemPrompt },
+  ];
+
+  if (userMessagesText.length >= 3) {
+    formattedMessages.push({
+      role: "system",
+      content: `The user's recent messages show this pattern: "${userMessagesText.slice(-3).join(' | ')}". Adapt your vocabulary to match theirs exactly. Use the same words they use.`,
+    });
+  }
+
+  formattedMessages.push(
     ...recentMessages.map((msg) => ({
       role: msg.role === "assistant" ? "assistant" : "user",
       content: msg.content,
-    })),
-  ];
+    }))
+  );
 
   // ── Save user message (fire-and-forget) ────────────────────────────────────
   const latestMessage = recentMessages[recentMessages.length - 1];
