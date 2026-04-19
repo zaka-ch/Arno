@@ -127,37 +127,62 @@ export async function POST(request: NextRequest) {
   const styleAnalysis = analyzeUserStyle(userMessagesText);
   const finalSystemPrompt = buildSystemPrompt(profile) + styleAnalysis;
 
-  const formattedMessages: any[] = [
+  // Build history (all but the last message)
+  const historyMessages = recentMessages.slice(0, -1).map((msg) => {
+    if (msg.imageDataUrl) {
+      return {
+        role: msg.role === "assistant" ? "assistant" : "user",
+        content: [
+          { type: "image_url", image_url: { url: msg.imageDataUrl } },
+          { type: "text", text: msg.content || "Analyze this image in the context of fitness and health" },
+        ],
+      };
+    }
+    return {
+      role: msg.role === "assistant" ? "assistant" : "user",
+      content: msg.content,
+    };
+  });
+
+  // Build the current (last) user message
+  const lastMsg = recentMessages[recentMessages.length - 1];
+  const hasImage = !!lastMsg?.imageDataUrl;
+
+  const currentUserMessage = hasImage
+    ? {
+        role: "user" as const,
+        content: [
+          {
+            type: "image_url",
+            image_url: { url: lastMsg.imageDataUrl as string },
+          },
+          {
+            type: "text",
+            text: lastMsg.content || "Please analyze this image in the context of fitness and health",
+          },
+        ],
+      }
+    : {
+        role: "user" as const,
+        content: lastMsg?.content ?? "",
+      };
+
+  const systemMessages: any[] = [
     { role: "system", content: finalSystemPrompt },
   ];
 
   if (userMessagesText.length >= 3) {
-    formattedMessages.push({
+    systemMessages.push({
       role: "system",
       content: `The user's recent messages show this pattern: "${userMessagesText.slice(-3).join(' | ')}". Adapt your vocabulary to match theirs exactly. Use the same words they use.`,
     });
   }
 
-  formattedMessages.push(
-    ...recentMessages.map((msg) => {
-      if (msg.imageDataUrl) {
-        return {
-          role: msg.role === "assistant" ? "assistant" : "user",
-          content: [
-            { type: "image_url", image_url: { url: msg.imageDataUrl } },
-            { type: "text", text: msg.content || "Analyze this image in the context of fitness and health" }
-          ]
-        };
-      }
-      
-      return {
-        role: msg.role === "assistant" ? "assistant" : "user",
-        content: msg.content,
-      };
-    })
-  );
-
-  const hasImage = recentMessages.some((m) => !!m.imageDataUrl);
+  const formattedMessages: any[] = [
+    ...systemMessages,
+    ...historyMessages,
+    currentUserMessage,
+  ];
 
   // ── Save user message (fire-and-forget) ────────────────────────────────────
   const latestMessage = recentMessages[recentMessages.length - 1];
@@ -176,9 +201,13 @@ export async function POST(request: NextRequest) {
   }
 
   // ── Call Groq ───────────────────────────────────────────────────────
+  const groqModel = hasImage
+    ? "meta-llama/llama-4-scout-17b-16e-instruct"
+    : "llama-3.3-70b-versatile";
+
   try {
     const stream = await groq.chat.completions.create({
-      model: hasImage ? "meta-llama/llama-4-scout-17b-16e-instruct" : "llama-3.3-70b-versatile",
+      model: groqModel,
       messages: formattedMessages as any,
       stream: true,
       max_tokens: 1024,
