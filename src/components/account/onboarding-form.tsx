@@ -50,6 +50,7 @@ export function OnboardingForm() {
     fitnessGoal: FITNESS_GOALS[0],
     gymExperience: GYM_LEVELS[0],
     preferredSplit: SPLITS[0],
+    gender: "prefer_not_to_say" as "male" | "female" | "prefer_not_to_say",
   });
 
   const handleChange = (field: string, value: string) => {
@@ -83,6 +84,7 @@ export function OnboardingForm() {
         fitnessGoal: formData.fitnessGoal,
         gymExperience: formData.gymExperience,
         preferredSplit: formData.preferredSplit,
+        gender: formData.gender,
       });
 
       toast.success("Profile saved! Zdem ya wahesh — let's get to work 💪");
@@ -201,6 +203,39 @@ export function OnboardingForm() {
                 onChange={(e) => handleChange("height", e.target.value)}
                 disabled={loading}
               />
+            </div>
+            {/* Gender */}
+            <div className="space-y-2">
+              <Label>Gender</Label>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleChange("gender", "male")}
+                  className={`flex-1 h-10 rounded-lg text-sm border font-medium transition-colors ${
+                    formData.gender === 'male' ? 'bg-primary text-primary-foreground border-primary' : 'bg-background text-muted-foreground border-border hover:bg-black/10 hover:text-foreground'
+                  }`}
+                >
+                  Male
+                </button>
+                <button
+                  type="button"  
+                  onClick={() => handleChange("gender", "female")}
+                  className={`flex-1 h-10 rounded-lg text-sm border font-medium transition-colors ${
+                    formData.gender === 'female' ? 'bg-primary text-primary-foreground border-primary' : 'bg-background text-muted-foreground border-border hover:bg-black/10 hover:text-foreground'
+                  }`}
+                >
+                  Female
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleChange("gender", "prefer_not_to_say")}
+                  className={`flex-1 h-10 rounded-lg text-sm border font-medium transition-colors ${
+                    formData.gender === 'prefer_not_to_say' ? 'bg-primary text-primary-foreground border-primary' : 'bg-background text-muted-foreground border-border hover:bg-black/10 hover:text-foreground'
+                  }`}
+                >
+                  Prefer not to say
+                </button>
+              </div>
             </div>
             <div className="space-y-2">
               <Label>Fitness Goal</Label>

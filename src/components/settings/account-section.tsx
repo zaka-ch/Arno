@@ -68,6 +68,7 @@ export function AccountSection() {
       fitness_goal: profile?.fitness_goal ?? FITNESS_GOALS[0],
       gym_experience: profile?.gym_experience ?? GYM_LEVELS[0],
       preferred_split: profile?.preferred_split ?? SPLITS[0],
+      gender: profile?.gender ?? "prefer_not_to_say",
     });
     setIsEditing(true);
   };
@@ -86,6 +87,7 @@ export function AccountSection() {
       fitness_goal: draft.fitness_goal || null,
       gym_experience: draft.gym_experience || null,
       preferred_split: draft.preferred_split || null,
+      gender: draft.gender || null,
       updated_at: new Date().toISOString(),
     };
 
@@ -207,6 +209,20 @@ export function AccountSection() {
               />
             ) : (
               <p className="font-medium text-sm py-2">{profile?.age ? `${profile.age} years` : <span className="text-muted-foreground italic">Not set</span>}</p>
+            )}
+          </div>
+          <div className="space-y-1.5">
+            <Label className="flex items-center gap-2 text-muted-foreground text-xs">
+              <User className="w-3.5 h-3.5" />Gender
+            </Label>
+            {isEditing ? (
+              <select className={selectCls} value={draft.gender ?? "prefer_not_to_say"} onChange={(e) => setDraft({ ...draft, gender: e.target.value as 'male'|'female'|'prefer_not_to_say' })}>
+                <option value="male">Male</option>
+                <option value="female">Female</option>
+                <option value="prefer_not_to_say">Prefer not to say</option>
+              </select>
+            ) : (
+              <p className="font-medium text-sm py-2">{profile?.gender === 'male' ? 'Male' : profile?.gender === 'female' ? 'Female' : <span className="text-muted-foreground italic">Prefer not to say</span>}</p>
             )}
           </div>
         </div>

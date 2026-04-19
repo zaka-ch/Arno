@@ -28,6 +28,7 @@ export function ProfileCompletionModal({ defaultName, onComplete }: Props) {
   const [goal, setGoal]               = useState("")
   const [level, setLevel]             = useState("")
   const [split, setSplit]             = useState("")
+  const [gender, setGender]           = useState<'male'|'female'|'prefer_not_to_say'|''>("")
   const [errorMsg, setErrorMsg]       = useState<string | null>(null)
   const [isPending, startTransition]  = useTransition()
 
@@ -41,6 +42,7 @@ export function ProfileCompletionModal({ defaultName, onComplete }: Props) {
     if (!goal)  { setErrorMsg("Please select your goal."); return }
     if (!level) { setErrorMsg("Please select your fitness level."); return }
     if (!split) { setErrorMsg("Please select your preferred split."); return }
+    if (!gender) { setErrorMsg("Please select your gender."); return }
 
     startTransition(async () => {
       try {
@@ -51,6 +53,7 @@ export function ProfileCompletionModal({ defaultName, onComplete }: Props) {
           fitness_goal:    goal,
           gym_experience:  level,
           preferred_split: split,
+          gender:          gender as 'male'|'female'|'prefer_not_to_say',
         })
         onComplete()
       } catch (err) {
@@ -135,6 +138,42 @@ export function ProfileCompletionModal({ defaultName, onComplete }: Props) {
                   onChange={e => setHeight(e.target.value)}
                   className={inputCls}
                 />
+              </div>
+            </div>
+
+            {/* Gender */}
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                Gender / الجنس / Genre
+              </label>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setGender('male')}
+                  className={`flex-1 h-10 rounded-lg text-sm border font-medium transition-colors ${
+                    gender === 'male' ? 'bg-primary text-primary-foreground border-primary' : 'bg-background text-muted-foreground border-border hover:bg-black/10 hover:text-foreground'
+                  }`}
+                >
+                  Male / ذكر
+                </button>
+                <button
+                  type="button"  
+                  onClick={() => setGender('female')}
+                  className={`flex-1 h-10 rounded-lg text-sm border font-medium transition-colors ${
+                    gender === 'female' ? 'bg-primary text-primary-foreground border-primary' : 'bg-background text-muted-foreground border-border hover:bg-black/10 hover:text-foreground'
+                  }`}
+                >
+                  Female / أنثى
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setGender('prefer_not_to_say')}
+                  className={`flex-1 h-10 rounded-lg text-sm border font-medium transition-colors ${
+                    gender === 'prefer_not_to_say' ? 'bg-primary text-primary-foreground border-primary' : 'bg-background text-muted-foreground border-border hover:bg-black/10 hover:text-foreground'
+                  }`}
+                >
+                  Prefer not to say
+                </button>
               </div>
             </div>
 

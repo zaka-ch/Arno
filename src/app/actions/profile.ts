@@ -8,6 +8,7 @@ interface ProfilePayload {
   age?: number | null;
   current_weight?: number | null;
   height?: number | null;
+  gender?: 'male' | 'female' | 'prefer_not_to_say' | null;
   fitness_goal?: string | null;
   gym_experience?: string | null;
   preferred_split?: string | null;
@@ -55,6 +56,7 @@ export async function submitOnboarding(formData: {
   age: number;
   currentWeight: number;
   height: number;
+  gender: 'male' | 'female' | 'prefer_not_to_say';
   fitnessGoal: string;
   gymExperience: string;
   preferredSplit: string;
@@ -64,6 +66,7 @@ export async function submitOnboarding(formData: {
     age: formData.age,
     current_weight: formData.currentWeight,
     height: formData.height,
+    gender: formData.gender,
     fitness_goal: formData.fitnessGoal,
     gym_experience: formData.gymExperience,
     preferred_split: formData.preferredSplit,

@@ -16,6 +16,7 @@ export interface Profile {
   age: number | null;
   current_weight: number | null;
   height: number | null;
+  gender?: 'male' | 'female' | 'prefer_not_to_say';
   fitness_goal: string | null;
   gym_experience: string | null;
   preferred_split: string | null;
@@ -54,11 +55,17 @@ export interface MacroTargets {
  * Activity: sedentary(1.2), light(1.375), moderate(1.55), very(1.725)
  */
 export function calculateMacros(profile: Profile): MacroTargets | null {
-  const { current_weight, height, age, fitness_goal } = profile;
+  const { current_weight, height, age, fitness_goal, gender } = profile;
   if (!current_weight || !height || !age) return null;
 
-  // BMR (assume male for now — can add gender later)
-  const bmr = 10 * current_weight + 6.25 * height - 5 * age + 5;
+  // BMR
+  let bmr = 10 * current_weight + 6.25 * height - 5 * age;
+  if (gender === 'female') {
+    bmr -= 161;
+  } else {
+    // Default to male or prefer_not_to_say
+    bmr += 5;
+  }
 
   // TDEE — assume moderately active for gym users
   const tdee = Math.round(bmr * 1.55);
