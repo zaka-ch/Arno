@@ -4,11 +4,30 @@ export function analyzeUserStyle(userMessages: string[]): string {
   const combined = userMessages.join(" ").toLowerCase();
   const style: string[] = [];
 
-  // Language detection
-  const hasArabic = /[\u0600-\u06FF]/.test(combined);
-  const hasFrench = /\b(wsh|frr|frérot|mec|ouais|trop|grave|oklm|jsp|ptdr|lol|ça|je|tu|il|on|les|des)\b/.test(combined);
-  const hasEnglish = /\b(bro|man|dude|ngl|lowkey|tbh|gonna|wanna|yeah|nah|lol|wtf|omg)\b/.test(combined);
-  const hasDarja = /\b(ya kho|wash|rak|zdem|mlih|bzaf|drk|rani|sala|makla|wlah|walah|khoya|wahesh|hadra|ndiro|ndir)\b/.test(combined);
+  // Count characters per language to determine PRIMARY language
+  const arabicChars = (combined.match(/[\u0600-\u06FF]/g) || []).length;
+  const totalChars = combined.replace(/\s/g, "").length || 1; // avoid div by zero
+  const arabicRatio = arabicChars / totalChars;
+
+  // Darja specific words (must match multiple to confirm)
+  const darjaWords = (combined.match(/\b(ya kho|wash|bzaf|zdem|mlih|drk|rani|wlah|walah|khoya|wahesh|sala|makla|ndiro|ywali|kima|hna|nta|nti|baraka|safi)\b/g) || []).length;
+
+  // French SPECIFIC words that dont exist in English
+  const frenchSpecificWords = (combined.match(/\b(wsh|ouais|frérot|frr|ptdr|jsp|tfk|oklm|ça|je suis|tu es|c'est|qu'est|pour|avec|mais|comme|dans|sur|une|les|des|mon|ton|son|nous|vous|ils|elles|mec|gars|trop bien|grave|carrément|franchement|putain|merde|bordel)\b/g) || []).length;
+
+  // English SPECIFIC words
+  const englishSpecificWords = (combined.match(/\b(the|is|are|was|were|have|has|had|will|would|could|should|bro|man|dude|gonna|wanna|yeah|nah|ngl|tbh|lowkey|honestly|because|that|this|with|from|what|how|why|when|where|my|your|his|her|our|their)\b/g) || []).length;
+
+  // Determine PRIMARY language
+  let primaryLanguage = "english"; // default
+
+  if (arabicRatio > 0.3 || darjaWords >= 2) {
+    primaryLanguage = darjaWords >= 2 ? "darja" : "arabic";
+  } else if (frenchSpecificWords > englishSpecificWords && frenchSpecificWords >= 2) {
+    primaryLanguage = "french";
+  } else {
+    primaryLanguage = "english";
+  }
 
   // Swearing/casual detection
   const casualSwearingLevel = (() => {
@@ -23,13 +42,20 @@ export function analyzeUserStyle(userMessages: string[]): string {
   const usesAllLower = combined === combined.toLowerCase();
   const usesEmojis = /\p{Emoji}/u.test(combined);
 
-  // Strict language rules
-  style.push(`STRICT LANGUAGE RULE: Respond ONLY in ${
-    hasDarja ? "Algerian Darja" : 
-    hasArabic ? "Arabic" : 
-    hasFrench ? "French" : 
-    "English"
-  }. Do not mix in any other language unless the user did it first in their message.`);
+  // Build strict language rule
+  const languageRule = `
+ABSOLUTE LANGUAGE RULE — THIS OVERRIDES EVERYTHING:
+The user is writing in: ${primaryLanguage.toUpperCase()}
+You MUST respond in ${primaryLanguage.toUpperCase()} ONLY.
+${primaryLanguage === "darja" ? "Use Algerian Darja naturally mixed with English gym terms." : ""}
+${primaryLanguage === "arabic" ? "Use Modern Standard Arabic or the Arabic dialect they used." : ""}
+${primaryLanguage === "french" ? "Use French. If they use French slang, match it." : ""}
+${primaryLanguage === "english" ? "Use English ONLY. Do not add French or Arabic words." : ""}
+DO NOT switch languages mid-response.
+DO NOT add words from other languages unless the user did it first.
+`;
+
+  style.push(languageRule);
 
   // Build swear instructions
   if (casualSwearingLevel === "none") {
@@ -39,12 +65,6 @@ export function analyzeUserStyle(userMessages: string[]): string {
   } else {
     style.push("User swears heavily — match their energy naturally");
   }
-
-  // Build style description
-  if (hasDarja) style.push("User writes in Algerian Darja — mirror their exact dialect and slang words they use");
-  if (hasFrench) style.push("User uses French slang — respond with same French street style");
-  if (hasEnglish && !hasDarja) style.push("User writes in casual English — match their exact slang");
-  if (hasArabic && !hasDarja) style.push("User writes in Arabic — respond in Arabic");
   
   if (usesNoPunctuation) style.push("User doesn't use punctuation — don't be overly formal with punctuation");
   if (usesAllLower) style.push("User writes in all lowercase — keep your tone super casual");
