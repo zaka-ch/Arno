@@ -103,7 +103,7 @@ export async function POST(request: NextRequest) {
   }
 
   // ── Parse body ──────────────────────────────────────────────────────────────
-  let body: { messages: { role: string; content: string }[]; conversationId?: string };
+  let body: { messages: { role: string; content: string; imageDataUrl?: string }[]; conversationId?: string };
   try {
     body = await request.json();
   } catch {
@@ -139,11 +139,25 @@ export async function POST(request: NextRequest) {
   }
 
   formattedMessages.push(
-    ...recentMessages.map((msg) => ({
-      role: msg.role === "assistant" ? "assistant" : "user",
-      content: msg.content,
-    }))
+    ...recentMessages.map((msg) => {
+      if (msg.imageDataUrl) {
+        return {
+          role: msg.role === "assistant" ? "assistant" : "user",
+          content: [
+            { type: "image_url", image_url: { url: msg.imageDataUrl } },
+            { type: "text", text: msg.content || "Analyze this image in the context of fitness and health" }
+          ]
+        };
+      }
+      
+      return {
+        role: msg.role === "assistant" ? "assistant" : "user",
+        content: msg.content,
+      };
+    })
   );
+
+  const hasImage = recentMessages.some((m) => !!m.imageDataUrl);
 
   // ── Save user message (fire-and-forget) ────────────────────────────────────
   const latestMessage = recentMessages[recentMessages.length - 1];
@@ -164,7 +178,7 @@ export async function POST(request: NextRequest) {
   // ── Call Groq ───────────────────────────────────────────────────────
   try {
     const stream = await groq.chat.completions.create({
-      model: "llama-3.3-70b-versatile",
+      model: hasImage ? "meta-llama/llama-4-scout-17b-16e-instruct" : "llama-3.3-70b-versatile",
       messages: formattedMessages as any,
       stream: true,
       max_tokens: 1024,
